@@ -1,0 +1,151 @@
+我给你的结论很明确：
+
+## 如果你打算**独立完成**，我建议你选 **3，而不是 1**。
+
+但要把 3 再收窄成：
+
+## **Multi-context visual grounding agent**
+
+也就是先做 **图像对 / 小规模图像集合上的跨图定位与验证**，不要一上来做超大图库的完整 visual-history search。
+
+原因不是它“更简单”而已，而是它在**实验闭环、数据可用性、算力压力、可复现性、写论文结构**这五件事上，对单人最友好。([GitHub][1])
+
+---
+
+## 为什么我不建议你独立做 1
+
+你想做的 1 不是普通长视频 QA，而是 **evidence-first long-video agent**。这个题本身是好的，但对单人来说，实验面会比看上去大很多。
+
+第一，**评测不天然闭环**。
+长视频 QA 数据很多，但“答案对不对”和“证据片段找没找对”往往不在同一个 benchmark 里。比如 EgoSchema 很适合做长时视频 QA，它有 5000 多个多选问答、总计 250 多小时三分钟视频；LongVideoBench 有 3763 个最长可到 1 小时的交错视频-字幕样本，并且已经接入自动评测库；但如果你要把“先找证据再回答”做成核心贡献，你通常还得额外接 temporal grounding 数据或自己补标一部分证据区间，不然论文故事会出现“方法在找证据，但主指标只看最终答案”的割裂。ReWind 之所以能把故事讲圆，是因为它同时在 VQA 和 temporal grounding 上做了实验，还用了 Charades-STA 这类 grounding benchmark。
+
+第二，**资源和工程负担偏重**。
+VCA 这类工作即使用 agent 化探索，也是在长视频场景里做 tree search、reward model 和 memory buffer；论文里直接写到，在其对比中，某些需要逐帧 caption 构树的基线会消耗 **60+ GPU 小时**，而且 VCA 的主实验还大量依赖 GPT-4o 作为核心推理组件。哪怕你不复现它的全部设定，只做一个课程项目版本，视频解码、帧采样、缓存、中间状态管理、长上下文调试都会比图像任务麻烦得多。([CVF开放获取][2])
+
+第三，**公开数据虽然多，但不一定都“拿来就顺手”**。
+EgoSchema 的数据和代码是开放给学术研究的，但它继承 Ego4D 许可；MovieChat-1K 虽然很适合长视频理解，包含 1K 长视频、1K dense captions 和 13K QA 对，但 repo 里也明确提到过视频版权限制，训练集一度主要以特征形式共享。对独立做项目的人来说，这种“数据有，但不总是最顺手”的状态，会拖慢你。
+
+所以不是 1 不能做，而是它更适合这种情况：
+你已经有比较稳定的视频实验基础设施，或者组里有人能分担数据/解码/评测这一块。对单人来说，它的单位时间产出偏低。([CVF开放获取][2])
+
+---
+
+## 为什么 3 更适合你独立完成
+
+如果你把 3 收成 **multi-context visual grounding agent**，它的实验链条会短很多，而且更干净。
+
+### 1. 数据和评测最省心
+
+MC-Bench 现在就是很适合单人起步的 benchmark：
+它有 **2000 个人工标注样本**，每个样本是 **图像对 + 开放式文本提示 + instance-level 标注**，并且 repo 直接给了下载方式和 evaluation code。指标也很明确，既看 image-level 的 Acc，也看 instance-level 的 AP50。对课程项目来说，这种“下载即评测”的数据形态非常友好。([GitHub][1])
+
+### 2. 现成 baseline 非常适合你做增量
+
+MC-Bench 论文最有价值的一点，是它已经告诉你一个事实：
+**一个简单的 agentic divide-and-conquer baseline（GPT-4o + Grounding DINO）就能明显超过很多 end-to-end MLLM。**
+论文里这个 agentic baseline 的整体 AP50 是 **36.2**，而 human upper bound 是 **41.3**；作者还明确写了，这个 baseline 的核心就是先用 GPT-4o 分析多图上下文、判断目标在哪些图里，再为每个目标生成更精炼的 referring phrase，最后交给 G-DINO 定位。对你来说，这意味着题目不是“从零造一个新世界”，而是“在一个已经被验证可行的两阶段框架上，提出一个更稳的改进点”。这非常适合单人。([CVF开放获取][3])
+
+### 3. 算力更可控
+
+和长视频不同，这个方向的数据单位是图像对，不是几分钟到一小时的视频。
+你不需要做长时序帧缓存，不需要反复解码视频，也不需要承受多轮视频 agent exploration 的高延迟。即便你用开源模型做，整体试验周转速度也会快很多。这个差别虽然论文不会替你写“更轻”，但从任务结构上就已经决定了。MC-Bench 本身也是专门为多图 instance-level 任务设计的，而不是大规模长序列处理。([CVF开放获取][3])
+
+### 4. 论文结构更容易成立
+
+这个题最容易写成标准论文的地方在于：
+问题定义非常清楚——**单图 grounding 很多，跨图上下文 grounding 很少，而且现有模型掉得很厉害**。MC-Bench 论文明确指出，专门在单图 grounding 上训练的 specialist MLLM，到了 multi-context 场景反而泛化不佳；而简单 agent baseline 能明显拉开差距。也就是说，你只要把自己的贡献落在一个清晰 bottleneck 上，比如“跨图证据选择”“图间一致性验证”“目标组装与误检抑制”，就很容易形成 clean story。([CVF开放获取][3])
+
+---
+
+## 那 3 应该做成什么样，才适合你单人完成
+
+我建议你**不要**直接做 DeepImageSearch / DISBench 那种完整 visual history exploration 版本，至少不要一开始就做。
+
+原因很简单：
+DISBench 虽然很有研究味，但它的数据形态对单人并不友好。它只有 **122 个 query**，但背后对应 **57 个用户、109,467 张照片** 的视觉历史，任务要求 agent 在大图库里做多步探索、元数据过滤、视觉验证和状态管理。论文里这恰恰也是它难的地方：作者自己都把 planning、constraint tracking 和 state management 列为核心瓶颈。这个更适合你在后面当扩展实验，而不是主战场。([arXiv][4])
+
+对你最现实的路线是：
+
+### 主任务
+
+**MC-Bench 上的 multi-context visual grounding agent**
+
+### 可选扩展
+
+用 DISBench 挑一个很小的 subset 做概念验证，证明你的方法不仅能在 image-pair 上工作，也能向 visual-history search 延伸。这样论文会更有野心，但主实验仍然稳定。([arXiv][4])
+
+---
+
+## 如果我是你，我会这样定题
+
+题目不要写得太大。
+我会建议你写成类似：
+
+**Cross-Image Verification for Multi-Context Visual Grounding Agents**
+
+或者更具体一点：
+
+**Reducing Cross-Image False Positives in Multi-Context Visual Grounding via Verification**
+
+这个题的优点是，你避开了“失败恢复”那种很难做完整闭环的系统问题，转而抓一个更硬、更好测的痛点：
+
+> agent 不是不会找，而是**跨图时容易把‘看起来像’的目标误当成真正目标**。
+
+这在 MC-Bench 的任务设定里是非常自然的，因为它本来就要求在多图上下文下做 referring / comparison / reasoning 三类开放式描述的定位。([CVF开放获取][3])
+
+---
+
+## 一个适合单人的最小可行实验设计
+
+我建议你把实验控制在三层：
+
+### 第一层：最朴素 baseline
+
+直接用一个支持多图输入的 MLLM 做 end-to-end grounding，复现 MC-Bench 里类似 Qwen2-VL 的设定。论文里 sequence-input 的 Qwen2-VL-72B 在 AP50 上是 **30.7**，7B 版本是 **19.1**；这给你一个参照系。([CVF开放获取][3])
+
+### 第二层：两阶段 agent baseline
+
+先做“哪张图里有目标 + 目标是什么”的 reasoning，再交给 detector/grounder 出框。MC-Bench 已经证明这条路有效。([CVF开放获取][3])
+
+### 第三层：你的贡献
+
+只加一个核心模块，比如：
+
+* cross-image consistency verifier
+* candidate reranker
+* phrase decomposition + verification
+* negative image suppression
+
+只要这个模块能把误检和串图错误压下去，你的论文故事就成立了。这个思路也和 MC-Bench 作者观察到的现象一致：当前模型在 multi-context 下不只是“看不懂”，而是 specialist 对多图泛化差，简单 agent 反而更强。([CVF开放获取][3])
+
+---
+
+## 最后的明确建议
+
+### 选 **3**
+
+而且把它收成：
+
+## **基于 MC-Bench 的 multi-context visual grounding agent**
+
+不要把主战场放在长视频上，也不要把 3 一开始就扩成超大图库 visual-history search。
+
+对独立完成的人来说，这个选择的优势是：
+
+* 数据现成，评测脚本现成。([GitHub][1])
+* baseline 已经证明 agent 化有效。([CVF开放获取][3])
+* 资源和调试成本显著低于长视频。([CVF开放获取][2])
+* 更容易做出一篇结构完整的小论文。([CVF开放获取][3])
+
+### 不建议你独立做 **1**
+
+不是因为方向不好，而是因为它对单人来说，**数据组织、证据标注、计算成本、系统调试**都更重，而且真正把“evidence-first”讲圆，通常要跨 QA 和 grounding 两套评测。([CVF开放获取][5])
+
+你要是愿意，我下一条我就直接把 **3** 细化成一个你能开干的 proposal：
+**题目、创新点、模型选型、baseline、评测指标、时间规划**，我会按“单人两个月可完成”的标准给你写。
+
+[1]: https://github.com/XuYunqiu/MC-Bench "GitHub - XuYunqiu/MC-Bench: [ICCV 2025] official repo of \"MC-Bench: A Benchmark for Multi-Context Visual Grounding in the Era of MLLMs\" · GitHub"
+[2]: https://openaccess.thecvf.com/content/ICCV2025/papers/Yang_VCA_Video_Curious_Agent_for_Long_Video_Understanding_ICCV_2025_paper.pdf "VCA: Video Curious Agent for Long Video Understanding"
+[3]: https://openaccess.thecvf.com/content/ICCV2025/papers/Xu_MC-Bench_A_Benchmark_for_Multi-Context_Visual_Grounding_in_the_Era_ICCV_2025_paper.pdf "MC-Bench: A Benchmark for Multi-Context Visual Grounding in the Era of MLLMs"
+[4]: https://arxiv.org/pdf/2602.10809 "DeepImageSearch: Benchmarking Multimodal Agents for Context-Aware Image Retrieval in Visual Histories"
+[5]: https://openaccess.thecvf.com/content/CVPR2025/papers/Diko_ReWind_Understanding_Long_Videos_with_Instructed_Learnable_Memory_CVPR_2025_paper.pdf "ReWind: Understanding Long Videos with Instructed Learnable Memory"

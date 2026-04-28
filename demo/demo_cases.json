@@ -1,0 +1,194 @@
+[
+  {
+    "type": "comparison",
+    "sample_id": 29,
+    "prompt": "The girl with the more difficult moves",
+    "text_style": "comparison",
+    "image1": "demo/comparison/image1.jpg",
+    "image2": "demo/comparison/image2.jpg",
+    "preview": "demo/comparison/preview_success.png",
+    "source_image1": "mcbench/MC-Bench_images/D3/132_14770686233.jpg",
+    "source_image2": "mcbench/MC-Bench_images/D3/133_14564535017.jpg",
+    "civ_confidence": 0.85,
+    "predictions": {
+      "a": {
+        "sample_id": 29,
+        "bbox": [19, 86, 396, 642],
+        "image_id": 2,
+        "confidence": 0.9,
+        "method": "two_stage_baseline",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "comparison"
+        }
+      },
+      "b": {
+        "sample_id": 29,
+        "bbox": [34, 219, 451, 352],
+        "image_id": 1,
+        "confidence": 0.8,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "comparison"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": null
+        }
+      },
+      "c": {
+        "sample_id": 29,
+        "bbox": [34, 219, 451, 352],
+        "image_id": 1,
+        "confidence": 0.85,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "comparison"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": 1
+        }
+      }
+    }
+  },
+  {
+    "type": "reasoning",
+    "sample_id": 0,
+    "prompt": "The man who has already swung a golf club",
+    "text_style": "reasoning",
+    "image1": "demo/reasoning/image1.jpg",
+    "image2": "demo/reasoning/image2.jpg",
+    "preview": "demo/reasoning/preview_success.png",
+    "source_image1": "mcbench/MC-Bench_images/D3/018_15029126048.jpg",
+    "source_image2": "mcbench/MC-Bench_images/D3/020_15028846229.jpg",
+    "civ_confidence": 0.85,
+    "predictions": {
+      "a": {
+        "sample_id": 0,
+        "bbox": [181, 149, 134, 241],
+        "image_id": 1,
+        "confidence": 0.9,
+        "method": "two_stage_baseline",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "reasoning"
+        }
+      },
+      "b": {
+        "sample_id": 0,
+        "bbox": [242, 210, 60, 192],
+        "image_id": 2,
+        "confidence": 0.8,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "reasoning"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": null
+        }
+      },
+      "c": {
+        "sample_id": 0,
+        "bbox": [242, 210, 60, 192],
+        "image_id": 2,
+        "confidence": 0.85,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "reasoning"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": 1
+        }
+      }
+    }
+  },
+  {
+    "type": "referring",
+    "sample_id": 83,
+    "prompt": "The cat with the different colored eyes",
+    "text_style": "referring",
+    "image1": "demo/referring/image1.jpg",
+    "image2": "demo/referring/image2.jpg",
+    "preview": "demo/referring/preview_success.png",
+    "source_image1": "mcbench/MC-Bench_images/D3/163_2044568920.jpg",
+    "source_image2": "mcbench/MC-Bench_images/D3/168_6466138957.jpg",
+    "civ_confidence": 0.80,
+    "predictions": {
+      "a": {
+        "sample_id": 83,
+        "bbox": [67, 61, 520, 750],
+        "image_id": 2,
+        "confidence": 0.95,
+        "method": "two_stage_baseline",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "referring"
+        }
+      },
+      "b": {
+        "sample_id": 83,
+        "bbox": [0, 58, 574, 561],
+        "image_id": 1,
+        "confidence": 0.8,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "referring"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": null
+        }
+      },
+      "c": {
+        "sample_id": 83,
+        "bbox": [0, 58, 574, 561],
+        "image_id": 1,
+        "confidence": 0.8,
+        "method": "civ_agent",
+        "parsed": {
+          "target_images": [1, 2],
+          "base_noun": "the",
+          "attributes": [],
+          "relations": [],
+          "reasoning_type": "referring"
+        },
+        "verification": {
+          "local_score": 1,
+          "cross_score": null
+        }
+      }
+    }
+  }
+]

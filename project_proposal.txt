@@ -1,0 +1,1107 @@
+
+---
+
+# 项目题目
+
+## **Cross-Image Verification for Multi-Context Visual Grounding Agents**
+
+副标题可以写成：
+
+**面向多图上下文视觉定位的跨图验证式 Agent 框架**
+
+---
+
+# 一、项目一句话定义
+
+我要解决的问题不是泛泛的“多模态 agent 很厉害”，而是一个很具体的痛点：
+
+> **在多图场景中，模型往往能“看懂大意”，但会把相似目标、干扰目标、错误图像里的候选框误当成真正目标。**
+
+所以你的核心目标不是造一个超大系统，而是：
+
+> **让 agent 在多图场景下，先生成候选，再做跨图验证，最后输出更可靠的定位结果。**
+
+这个问题在 MC-Bench 上是非常自然的。MC-Bench 本身就是首个专门针对**多图场景 visual grounding** 的 benchmark，包含 2,000 个成对图像样本、1,514 条开放式文本描述和 3,200 个 language-grounded bounding boxes；文本分成 referring、comparison、reasoning 三类，并覆盖 20 类实际技能。官方同时提供了类似 COCO 的标注格式和评测脚本，指标包括 image-level Acc 和 instance-level AP50。([CVF开放获取][1])
+
+---
+
+# 二、这个项目为什么值得做
+
+这个题的价值不在于“它是一个 benchmark”，而在于它命中了一个很真实的 failure mode：
+
+* 单图 grounding 已经很多了；
+* 多图 reasoning 也很多了；
+* 但**多图上下文下的 instance-level grounding** 还明显不成熟。
+
+MC-Bench 的官方结果已经说明了这个空白：强模型在多图定位上和人类仍有明显差距。比如官方表中，Qwen2-VL-72B 的 sequence-input 版本总体 AP50 是 **30.7**，而官方 **agentic baseline（GPT-4o + Grounding DINO）** 能到 **36.2**，人类是 **41.3**。这说明两件事：第一，这个任务不是已经被打穿的；第二，**agent 式的“分步推理 + 定位”确实比直接 end-to-end 更有效**。([CVF开放获取][1])
+
+对你这种单人项目来说，这特别好，因为你的目标不需要是“重造 SOTA”，而是：
+
+> **做一个比原始 end-to-end VLM 更稳的、多图验证式两阶段方法。**
+
+只要你能在某些子集、某些错误类型上明显压住 baseline，这就是一篇像样的小论文。
+
+---
+
+# 三、项目的核心研究问题
+
+我建议你把论文问题写成下面三个，足够聚焦，也足够像研究问题：
+
+## RQ1
+
+**为什么多图 visual grounding 会失败？**
+是因为模型不会选对图，还是不会在图里找对框，还是会被跨图干扰项误导？
+
+## RQ2
+
+**在多图场景中，引入显式的 cross-image verification，是否比直接让 VLM 一步输出框更稳？**
+
+## RQ3
+
+**对于不同文本类型（referring / comparison / reasoning），哪一类最依赖跨图验证？**
+
+这三个问题是你的论文主线。
+它们都能在 MC-Bench 上被量化回答。MC-Bench 明确区分了三类文本风格，并包含正样本和负样本；其中 1,712 个是 positive，288 个是 negative，comparison 和 reasoning 占比最高，分别是 810 和 844。([CVF开放获取][1])
+
+---
+
+# 四、项目范围控制：你该做什么，不该做什么
+
+这部分非常重要。你是**一个人包揽全部**，所以 scope 必须卡死。
+
+## 必做范围
+
+你只做：
+
+> **双图输入下的 multi-context visual grounding**
+
+具体就是：
+
+* 输入：一对图像 + 一条文本 prompt
+* 输出：目标所在图像中的 bounding boxes
+* 核心方法：**候选生成 + 跨图验证 + 重排序/抑制**
+
+## 不做的东西
+
+你先不要做：
+
+* 不做超过 2 张图的 multi-hop search
+* 不做大图库 retrieval
+* 不做 GUI click recovery
+* 不做 segmentation
+* 不做 end-to-end 大模型训练
+* 不做复杂 RL / tree search
+* 不做 heavy fine-tuning 主线
+
+你这个项目最容易失控的地方，就是把“cross-image verification”做成“大而全的 agent 平台”。
+不要这么做。你的论文应该是一个**很窄但很准**的题。
+
+---
+
+# 五、我建议你的最终方法形态
+
+我建议你做一个**三阶段框架**，足够完整，但仍然能由一个人完成。
+
+## 方法总览
+
+### 阶段 A：Prompt Parsing / Task Structuring
+
+把原始自然语言 prompt 解析成更适合 grounding 的结构化表示。
+
+### 阶段 B：Multi-Phrase Candidate Proposal
+
+为每张图生成候选框集合，不急着立刻决定最终答案。
+
+### 阶段 C：Cross-Image Verification and Reranking
+
+这是你的核心贡献。利用双图上下文，对候选框进行跨图一致性验证，然后重排序，抑制误检。
+
+---
+
+# 六、你要做出的“最小创新点”
+
+你的最小创新点我建议定义为：
+
+## **Cross-Image Verification Module（CIV）**
+
+它不负责“看世界”，它只负责一件事：
+
+> **判断某个候选框，是否真的是在“结合另一张图和原始文本约束”之后仍然成立的目标。**
+
+这句话就是你的论文灵魂。
+
+因为多图任务难的地方，不是单张图里“这是不是一只狗”，而是：
+
+* 是不是“**左图里更暗的那辆车**”
+* 是不是“**两张图里同一类别但不同属性的目标**”
+* 是不是“**只有第二张图里出现的那个实例**”
+* 是不是“**两张图中满足某种关系的对象组**”
+
+所以你真正解决的是：
+
+> **cross-image false positive**
+>
+> 即：单图看起来像对，但放回双图语境后就是错的。
+
+---
+
+# 七、推荐的技术路线
+
+我建议你坚持一个原则：
+
+## **主线尽量训练少、推理逻辑强、模块清楚。**
+
+理由很简单：MC-Bench 官方 repo 展示的数据目录里直接是 `mc-bench_v0.2_val.json` 和图片目录，README 没有公开 train split 的说明，主要提供的是数据与评测代码。对你这种单人项目，最稳妥的做法不是一开始就大规模训练，而是先做**训练少甚至 training-free 的方法**，再考虑轻量微调。([GitHub][2])
+
+---
+
+# 八、具体模型建议
+
+## 1）Planner / Verifier：Qwen2.5-VL
+
+Qwen2.5-VL 的技术报告明确强调了它的**precise object localization**、对图像与长视频的理解，以及作为**interactive visual agent** 的能力，因此它很适合拿来做多图 prompt parsing、图级判断、候选验证这类工作。([arXiv][3])
+
+你不一定非要用最大模型。
+作为个人项目，优先考虑：
+
+* 小尺寸模型做快速迭代
+* 大一点的模型只在最终实验或 verifier 上跑
+
+## 2）Candidate Generator：Qwen2.5-VL（直接 Grounding）
+
+**更新说明**：原方案使用 Grounding DINO 作为候选框生成器，但实际开发中发现：
+1. Grounding DINO 与当前环境（transformers 5.x + PyTorch 2.7）存在严重的 API 兼容性问题
+2. 引入额外的检测模型增加了不必要的复杂度和显存占用
+3. Qwen2.5-VL 本身具备很强的 grounding 能力，可以直接输出候选框
+
+**新方案**：使用同一个 Qwen2.5-VL 模型完成候选框生成。对每张目标图单独调用 VLM，要求输出 top-k 候选框及置信度。这样整个 pipeline 只需要一个模型，更简洁高效。
+
+优势：
+* 无需额外模型权重（节省 ~700MB 显存）
+* 无环境兼容性问题
+* 候选框生成和后续验证使用同一模型，语义一致性更好
+* 代码更简洁，维护成本低
+
+## 3）可选视觉表征模块：CLIP / SigLIP / DINOv2
+
+这个不是必须，但如果你后面觉得 verifier 太贵，可以加一个轻量视觉相似度模块做 crop-level 辅助打分。
+
+我的建议是：
+
+* **第一版先不用**
+* 只有当你发现 verifier 太慢或者不稳定，再补
+
+---
+
+# 九、方法设计：你每一步到底要做什么
+
+下面是最关键的部分。
+
+---
+
+## Step 0：先把项目目标写死
+
+你先在自己的 README 顶部写一句：
+
+> 我不是在做一个通用多模态 agent。
+> 我是在做一个针对 MC-Bench 的、面向 cross-image false positive 的 verification-based grounding agent。
+
+这一步很重要，因为后面你会不断想加模块。
+这句话会把你拉回来。
+
+---
+
+## Step 1：跑通数据与评测
+
+### 你要做什么
+
+1. 下载 MC-Bench 数据和官方 repo
+2. 跑通 `eval_mc_bench.py`
+3. 读懂 annotation schema
+4. 写自己的数据加载器
+
+官方 README 已经给了数据目录结构、annotation 格式、results 格式和命令行评测方法。description 里包含 `text`、`positive_sample`、`text_style`；annotation 是标准 box；结果格式就是 `[image_id, category_id, bbox, score]`。([GitHub][2])
+
+### 你要产出的文件
+
+* `dataset.py`
+* `mcbench_parser.py`
+* `eval_wrapper.py`
+
+### 你要检查的事情
+
+* 每个 sample 是否都正好有两张图
+* 哪些 prompt 是 negative
+* 哪些 prompt 是 plural / group-based
+* 哪些样本在两张图里都有目标，哪些只在一张图里有
+
+### 这一步的完成标准
+
+你能做到：
+
+* 随机抽一个样本，把图、prompt、GT boxes 可视化出来
+* 用官方脚本对一个 dummy result 跑出分数
+
+---
+
+## Step 2：自己切 dev/test
+
+### 为什么要这样做
+
+由于公开 repo 里展示的是 `mc-bench_v0.2_val.json`，没有清楚公开 train split 的说明，所以你不要把全部公开集拿来边调边测。更合理的做法是：
+
+> **从公开集里自己切一个 dev 子集，专门调 prompt、阈值和规则；剩下大部分作为 final evaluation。** ([GitHub][2])
+
+### 我建议的切法
+
+* `dev = 300`
+* `test = 1700`
+
+而且要**分层抽样**，至少按下面三维分层：
+
+* text_style：referring / comparison / reasoning
+* positive / negative
+* target position：first / second / both / none
+
+### 你要做什么
+
+写一个 `split_mcbench.py`：
+
+* 固定 random seed
+* 输出 `dev_ids.json`
+* 输出 `test_ids.json`
+
+### 这一步的目标
+
+以后你所有阈值、prompt 改写、heuristic 调整都只在 dev 上做。
+test 只在你要出正式表格时跑。
+
+---
+
+## Step 3：先复现一个“弱 baseline”
+
+你先不要急着做自己的方法。
+先做一个很朴素的 baseline，最好是下面两种里至少一种。
+
+### Baseline A：End-to-End VLM
+
+输入两张图和原始 prompt，直接让 VLM 输出：
+
+* 哪张图有目标
+* 每张图的 bounding boxes
+
+你可以要求它输出 JSON，例如：
+
+```json
+{
+  "image1_has_target": true,
+  "image2_has_target": false,
+  "boxes_image1": [[x1,y1,x2,y2], ...],
+  "boxes_image2": []
+}
+```
+
+### 为什么这一步一定要做
+
+因为你的改进，必须有比较对象。
+MC-Bench 官方结果已经表明，直接 sequence-input 的 Qwen2-VL 在这个任务上能做到一定水平，但和 agentic baseline 仍有差距。([CVF开放获取][1])
+
+### 你在实践中要注意
+
+* VLM 直接吐坐标会不稳定
+* JSON 经常格式错
+* 框的数目会乱
+* 负样本上容易胡乱出框
+
+这正好会变成你论文里的一部分动机。
+
+---
+
+## Step 4：做一个”两阶段” baseline
+
+这一步非常关键。
+你要做一个与你最终方法最接近、但还没有 verification 的 baseline。
+
+**更新说明**：原方案使用 Grounding DINO 做候选框生成，现改为使用 Qwen2.5-VL 直接 grounding。整个 pipeline 只用一个模型。
+
+MC-Bench 官方论文中的 agentic baseline 本质上就是：
+
+1. 先理解多图上下文和文本
+2. 再做定位
+   并取得了优于很多 end-to-end 模型的效果。([CVF开放获取][1])
+
+### 你要做的 baseline 版本
+
+#### 4.1 图级判断（Stage 1: Prompt Parsing）
+
+给 VLM 输入双图和原始 prompt，要求输出：
+
+* image1 是否可能有目标
+* image2 是否可能有目标
+* target 的简化 noun phrase
+* 关键属性
+* 可能的排除条件
+
+输出格式例如：
+
+```json
+{
+  “target_images”: [1],
+  “base_noun”: “car”,
+  “attributes”: [“red”, “small”],
+  “relations”: [],
+  “reasoning_type”: “comparison”
+}
+```
+
+#### 4.2 VLM 直接 Grounding（Stage 2: Candidate Generation）
+
+对每张目标图，单独调用 VLM 进行 grounding：
+
+* 输入：单张图 + 原始文本描述
+* 输出：top-3 候选框及置信度
+
+```json
+{
+  “candidates”: [
+    {“bbox”: [x1, y1, x2, y2], “score”: 0.9},
+    {“bbox”: [x1, y1, x2, y2], “score”: 0.6}
+  ]
+}
+```
+
+#### 4.3 选择最佳候选
+
+按 VLM 输出的 score 排序，取 top-1 作为最终输出。
+
+这就是没有 verification 的 baseline。
+
+### 这一步的意义
+
+它会成为你后面所有实验的”父 baseline”。
+
+---
+
+# 十、你的核心方法：Cross-Image Verification（CIV）
+
+现在进入论文主体。
+
+---
+
+## 核心思想
+
+普通两阶段方法的问题是：
+
+> 它会产生很多“看起来合理”的候选框，
+> 但这些候选框往往只在单图局部成立，
+> 放回双图语境就未必成立。
+
+所以你要在候选生成之后，加一个**跨图验证器**。
+
+---
+
+## CIV 的输入
+
+对于每个候选框，你喂给 verifier：
+
+* 原始双图
+* 当前图的全图
+* 当前候选框裁剪图
+* 原始 prompt
+* planner 输出的结构化信息
+* 可选：另一张图的 top candidates
+
+---
+
+## CIV 要回答的问题
+
+对每个 candidate，它至少要判断三件事：
+
+### 1）这个框本身像不像 prompt 指向的目标？
+
+这是局部语义匹配。
+
+### 2）这个框所在的图，是否真的应该包含目标？
+
+这是 image-level presence validation。
+
+### 3）结合另一张图，这个框是不是更合理？
+
+这是跨图验证的关键。
+
+---
+
+## 你可以把验证分成两层
+
+### 第一层：单框验证
+
+问 verifier：
+
+> “结合原始 prompt，这个框是不是候选目标？”
+
+输出 yes/no + confidence。
+
+### 第二层：跨图比较验证
+
+对 comparison / reasoning 类型，再问：
+
+> “如果把两张图一起考虑，这个框是否比另一张图里的干扰候选更符合 prompt？”
+
+这一步是你和普通 reranker 的区别。
+
+---
+
+## 评分函数建议
+
+你不需要搞得太学术化，先做一个线性加权就行：
+
+[
+S(b)=\alpha S_{det}+\beta S_{img}+\gamma S_{local}+\delta S_{cross}
+]
+
+其中：
+
+* `S_det`：Grounding DINO 的 detector score
+* `S_img`：图级 presence score
+* `S_local`：单框验证分数
+* `S_cross`：跨图比较分数
+
+### 实际做法
+
+先手调权重，在 dev 上找一组稳定参数。
+不要一开始就训练一个复杂的 learned reranker。
+你是一个人，先把“有效”做出来，比“端到端学出来”更重要。
+
+---
+
+# 十一、按文本类型分别处理
+
+这是我非常建议你做的一个点。
+MC-Bench 的 prompt 明确有三类：referring、comparison、reasoning。([CVF开放获取][1])
+
+这三类的最佳策略其实不一样。
+
+---
+
+## A. Referring
+
+例如：“第二张图里的蓝色杯子”。
+
+### 策略
+
+* 更依赖 image presence
+* 更依赖 attribute match
+* 跨图验证可以简单一点
+
+### 你的实现
+
+* 若 planner 判定只有一张图应有目标，就对另一张图强抑制
+* 主要做 local verification
+
+---
+
+## B. Comparison
+
+例如：“两张图中更大的那只狗”。
+
+### 策略
+
+* 一定要做 cross-image pairwise verification
+* 单框对不对不够，必须比较
+
+### 你的实现
+
+* 每张图先取 top-m candidates
+* 枚举 pair
+* 让 verifier 判断哪一对满足条件
+* 把 pair score 回传到 box score
+
+---
+
+## C. Reasoning
+
+例如：“两图中属于同一组、满足某种逻辑关系的目标”。
+
+### 策略
+
+* 最容易失败
+* 需要 phrase decomposition
+
+### 你的实现
+
+先把 prompt 拆成：
+
+* base entity
+* property
+* relation / logic clue
+
+然后 grounding 只对 base entity 做，verification 再用完整 prompt 判。
+
+这个设计很关键。
+因为你要避免让 detector 直接吃过于抽象的 reasoning phrase。
+
+---
+
+# 十二、你真正该实现的模块清单
+
+**更新说明**：由于改用 VLM 直接 grounding，模块清单大幅简化。不再需要 phrase_builder、candidate_generator、candidate_merger 等独立模块。
+
+---
+
+## 1. `prompt_parser.py`
+
+功能：
+
+* 输入：双图 + prompt
+* 输出：结构化 JSON（target_images, base_noun, attributes, relations, reasoning_type）
+* 已实现
+
+---
+
+## 2. `two_stage_agent.py`
+
+功能（合并了原 candidate_generator + candidate_merger）：
+
+* Stage 1: 调用 prompt_parser 解析 prompt
+* Stage 2: 对每张目标图调用 VLM 做 grounding，输出 top-k 候选框
+* 选择最佳候选输出
+* 已实现
+
+---
+
+## 3. `image_presence_judge.py`
+
+功能：
+
+* 判断每张图是否应该有目标
+* 给出 presence score
+* 目前由 prompt_parser 的 target_images 字段承担
+
+---
+
+## 4. `local_verifier.py`
+
+功能：
+
+* 对候选框局部裁剪图做验证
+* 评分：这是不是目标
+
+---
+
+## 5. `cross_image_verifier.py`
+
+这是你的核心模块。
+
+功能：
+
+* 对 comparison/reasoning 样本，利用另一张图辅助验证
+* 对 box 或 box pair 打分
+
+---
+
+## 6. `group_selector.py`
+
+功能：
+
+* 决定最终输出几个框
+* 处理 singular / plural / grouped targets
+
+最初版本可以很朴素：
+
+* singular：取 top-1
+* plural：取所有 score > τ 的框
+* both-image positive：分别输出
+
+---
+
+## 7. `result_formatter.py`
+
+功能：
+
+* 转成 MC-Bench 结果 JSON
+* 跑官方 `eval_mc_bench.py`
+
+---
+
+# 十三、第一版最小可行系统（MVP）
+
+如果你怕项目太大，那你先只做下面这个版本。
+
+## MVP 版本
+
+* parser：只输出 target image + base noun + attributes
+* grounder：VLM 直接 grounding（Qwen2.5-VL）
+* verifier：只做单框验证，不做 box pair
+* rerank：线性打分
+* final：支持 singular / plural，支持 negative suppression
+
+这个版本已经够写一篇课程论文了。
+后面如果还有时间，再加：
+
+## Plus 版本
+
+* comparison 特化的 pairwise verification
+* reasoning 的 phrase decomposition
+* group-aware selection
+
+---
+
+# 十四、实验设计：你必须怎么做
+
+这里直接按论文标准来。
+
+---
+
+## 1. 主表（Main Results）
+
+### 要比较的方法
+
+至少包括：
+
+* End-to-End VLM
+* Two-stage baseline（无 verification）
+* 你的方法（CIV-Agent）
+
+### 指标
+
+* image-level Acc
+* instance-level AP50
+* 最好再按三类文本风格拆分：
+
+  * referring
+  * comparison
+  * reasoning
+
+MC-Bench 官方就是这样评 image-level 和 instance-level 的。([CVF开放获取][1])
+
+---
+
+## 2. 子集实验
+
+你一定要做：
+
+### a) 按 text style 分
+
+因为你方法最可能在 comparison / reasoning 上收益更大。
+
+### b) 按 positive/negative 分
+
+看你有没有减少胡乱出框。
+
+### c) 按目标出现位置分
+
+* first only
+* second only
+* both
+* none
+
+这个维度很适合解释 cross-image verification 到底在帮什么。
+
+---
+
+## 3. 消融实验（Ablation）
+
+这是论文最重要的部分之一。
+
+至少做下面几个 ablation：
+
+### Ablation 1：去掉 image presence
+
+看图级判断是否真的重要。
+
+### Ablation 2：去掉 local verification
+
+看 verifier 是否有效。
+
+### Ablation 3：去掉 cross-image verification
+
+这是最关键的。
+如果去掉它，性能应明显回落。
+
+### Ablation 4：单 phrase vs 多 phrase
+
+看 candidate proposal 是否真的需要 phrase decomposition。
+
+### Ablation 5：不同文本类型是否使用不同策略
+
+比如 comparison/reasoning 才开 cross-image pairwise。
+
+---
+
+## 4. 误差分析（Error Analysis）
+
+你一定要人工读至少 80–100 个样本。
+然后给错误分类。
+
+建议分成 6 类：
+
+1. **Wrong image selection**
+2. **Correct image, wrong box**
+3. **Cross-image distractor confusion**
+4. **Attribute mismatch**
+5. **Missed multi-instance/group target**
+6. **Negative sample false alarm**
+
+这一节非常值钱。
+哪怕你的绝对分数一般，只要误差分析做得好，论文就仍然像样。
+
+---
+
+# 十五、你该怎么实现 prompt
+
+这是很多人容易忽略但实际很重要的地方。
+
+---
+
+## Parser prompt
+
+你可以让 VLM 输出严格 JSON：
+
+> 你将看到两张图片和一条文本描述。
+> 请分析该描述属于 referring / comparison / reasoning 哪一类；
+> 判断 image1 和 image2 是否应该包含目标；
+> 提取 base noun、关键 attributes、relations、expected_count。
+> 仅输出合法 JSON。
+
+### 目的
+
+不是让它直接给框，而是让它做“任务结构化”。
+
+---
+
+## Local verifier prompt
+
+> 给定候选框裁剪图、原始图和文本描述，
+> 判断该裁剪区域是否为描述中的目标实例。
+> 输出 yes/no 和 0-1 置信度。
+
+---
+
+## Cross-image verifier prompt
+
+> 给定两张图中的候选区域和原始描述，
+> 判断当前候选是否在结合另一张图的上下文后仍然成立。
+> 若描述带有比较/逻辑关系，请依据两图共同信息判断。
+
+### 关键点
+
+你要强制输出结构化结果，例如：
+
+```json
+{
+  "valid": true,
+  "score": 0.83,
+  "reason": "..."
+}
+```
+
+---
+
+# 十六、时间规划：从现在到 5 月 16 日怎么排
+
+今天是 **2026 年 3 月 23 日**，到 **5 月 16 日** 大约还有 54 天。
+你一个人做，我建议按 8 周压缩推进。
+
+---
+
+## 第 1 周：吃透 benchmark，搭好骨架
+
+你要完成：
+
+* 下载数据
+* 跑通官方评测
+* 写数据加载
+* 写可视化脚本
+* 抽样读 50 个样本，建立直觉
+
+本周目标：
+
+> 你能一眼看出这个任务到底在难什么。
+
+---
+
+## 第 2 周：做 end-to-end baseline
+
+你要完成：
+
+* 跑通双图输入的 VLM baseline
+* 统一输出 JSON
+* 写坐标后处理
+* 在 dev 上出第一版分数
+
+本周目标：
+
+> 先得到一个“能跑但不稳”的起点。
+
+---
+
+## 第 3 周：做两阶段 baseline
+
+你要完成：
+
+* prompt_parser（VLM 解析 prompt 结构）
+* VLM 直接 grounding（候选框生成）
+* two_stage_agent pipeline
+* baseline 评测
+
+本周目标：
+
+> 有一个稳定、可复现、可作为论文对照组的两阶段方法。
+
+---
+
+## 第 4 周：实现 local verification
+
+你要完成：
+
+* crop pipeline
+* verifier prompt
+* single-box scoring
+* reranking
+
+本周目标：
+
+> 明确 local verification 是否有增益。
+
+---
+
+## 第 5 周：实现 cross-image verification
+
+你要完成：
+
+* comparison/reasoning 样本识别
+* pairwise verification
+* cross-image score 融合
+* negative suppression
+
+本周目标：
+
+> 你的核心方法真正成型。
+
+---
+
+## 第 6 周：做大规模实验 + 调参
+
+你要完成：
+
+* dev 上调 α β γ δ
+* 记录所有超参
+* 跑 test
+* 做子集结果
+
+本周目标：
+
+> 拿到主表。
+
+---
+
+## 第 7 周：做消融和误差分析
+
+你要完成：
+
+* 所有 ablation
+* 典型 case 图
+* 错误分类统计
+* 撰写方法图与流程图
+
+本周目标：
+
+> 论文开始像论文。
+
+---
+
+## 第 8 周：写报告 + 做展示
+
+你要完成：
+
+* 摘要
+* 引言
+* related work
+* method
+* experiments
+* limitations
+* PPT
+* demo
+
+本周目标：
+
+> 交付物全部闭环。
+
+---
+
+# 十七、你最容易踩的坑，以及怎么避免
+
+---
+
+## 坑 1：一开始就想训练
+
+不要。
+先把 training-free 版本跑通。
+
+原因很简单：
+
+* benchmark 没有清晰公开 train split
+* 你一个人调训练成本太高
+* 你真正的创新点不在大规模学习，而在 verification 逻辑
+
+---
+
+## 坑 2：让 detector 直接吃很复杂的 reasoning prompt
+
+不要。
+先把 prompt 分解成：
+
+* noun
+* attribute
+* relation clue
+
+VLM grounding 只负责”找东西”，
+复杂逻辑交给 verifier。
+
+---
+
+## 坑 3：verifier 太贵太慢
+
+解决方法：
+
+* 先只验证 top-k
+* 只对 comparison/reasoning 开启 cross-image verifier
+* referring 只做 local verifier
+
+---
+
+## 坑 4：框太多，结果格式乱
+
+解决方法：
+
+* 明确 singular / plural 策略
+* 保证每个 box 都有 score
+* 输出前统一过滤和排序
+
+---
+
+## 坑 5：最后只剩一个“会跑的系统”，没有论文故事
+
+解决方法：
+从第一天开始就记录：
+
+* 哪些错误类型最多
+* 你的方法具体减少了哪类错误
+* 哪一类 prompt 最受益
+
+你的论文不是“我搭了个系统”，而是：
+
+> **我发现多图 grounding 的关键失败是 cross-image false positive，
+> 我提出 verification 机制去抑制它。**
+
+---
+
+# 十八、如果实验效果一般，怎么保底
+
+这是现实问题，我直接告诉你保底策略。
+
+如果最后主指标提升不大，你还有三种写法可以救项目：
+
+## 保底写法 1：强调特定子集收益
+
+例如：
+
+* comparison 提升明显
+* negative suppression 更稳
+* reasoning 上误检减少
+
+## 保底写法 2：强调错误类型改善
+
+即使总 AP50 提升不大，只要 cross-image distractor confusion 明显下降，这仍然是有效贡献。
+
+## 保底写法 3：强调效率/成本
+
+如果你的 verifier 只对少量候选做验证，但效果接近更重的方法，这也是价值。
+
+---
+
+# 十九、最终你应该交出的成果
+
+---
+
+## 代码层
+
+* 完整 repo
+* 一键跑 baseline
+* 一键跑你的方法
+* 一键评测
+* 可视化脚本
+
+## 论文层
+
+* 明确的问题定义
+* 一张总流程图
+* 一张主结果表
+* 一张 ablation 表
+* 一页 error analysis
+* 4–6 个 qualitative cases
+
+## Demo 层
+
+最简单的 demo 就够：
+
+* 输入两张图和文本
+* 展示 parser 输出
+* 展示候选框
+* 展示 verification 后保留的最终框
+
+你不需要做复杂前端。
+一个 notebook / gradio 页面就可以。
+
+---
+
+# 二十、我给你的最终执行建议
+
+如果你照这个 proposal 做，我建议你把项目目标分成三层：
+
+## 第一层：必须达成
+
+* 跑通 MC-Bench
+* 复现至少一个 baseline
+* 实现两阶段 agent
+* 做出 verification 模块
+* 拿到完整主表
+
+## 第二层：最好达成
+
+* comparison / reasoning 特化
+* 负样本抑制
+* 完整消融
+* 误差分类图表
+
+## 第三层：有余力再做
+
+* 轻量学习式 reranker
+* 更强 verifier
+* 更漂亮的 demo
+* 向 visual-history search 扩展
+
+---
+
+# 二十一、最后一句最重要的话
+
+你这个项目成败的关键，不在于你用了多少模型，
+而在于你能不能把下面这句话做实：
+
+> **多图 grounding 的核心问题，不是找不到候选，而是缺少“结合另一张图之后再判断一次”的验证机制。**
+
+只要这句话被你的实验支撑起来，这个项目就是成立的。
+
+你下一步最该做的事，不是继续想新点子，而是立刻开始做这三件事：
+
+1. 下载 MC-Bench，跑通官方评测。([GitHub][2])
+2. 做一个最朴素的 end-to-end baseline。
+3. 做一个无 verification 的两阶段 baseline，作为你的对照组。
+
+等你开始搭代码后，我可以继续直接帮你往下写：
+**项目目录结构、核心 prompt、结果 JSON 格式、以及实验表格模板。**
+
+[1]: https://openaccess.thecvf.com/content/ICCV2025/papers/Xu_MC-Bench_A_Benchmark_for_Multi-Context_Visual_Grounding_in_the_Era_ICCV_2025_paper.pdf "MC-Bench: A Benchmark for Multi-Context Visual Grounding in the Era of MLLMs"
+[2]: https://github.com/XuYunqiu/MC-Bench "GitHub - XuYunqiu/MC-Bench: [ICCV 2025] official repo of \"MC-Bench: A Benchmark for Multi-Context Visual Grounding in the Era of MLLMs\" · GitHub"
+[3]: https://arxiv.org/abs/2502.13923 "[2502.13923] Qwen2.5-VL Technical Report"
+[4]: https://github.com/idea-research/groundingdino "GitHub - IDEA-Research/GroundingDINO: [ECCV 2024] Official implementation of the paper \"Grounding DINO: Marrying DINO with Grounded Pre-Training for Open-Set Object Detection\" · GitHub"
